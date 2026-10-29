@@ -1,0 +1,67 @@
+# Plan morning-digest § 3–4. Saves one rig page as a single HTML file and puts it on GitHub
+# Pages. The page is built here and never committed (ADR 0003): the marker comes from the repo
+# secret LANE_MARKER. Clean-up = delete the secret, run this again; the same link is overwritten.
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      night:
+        description: "Night to preview (YYYY-MM-DD)"
+        default: "2026-10-28"
+        required: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Save the page
+        env:
+          NIGHT: ${{ inputs.night }}
+          LANE_MARKER: ${{ secrets.LANE_MARKER }}
+          PORT: "8787"
+        run: |
+          [[ "$NIGHT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "bad night: $NIGHT"; exit 1; }
+          pnpm start &
+          for i in $(seq 30); do curl -sf localhost:8787/health >/dev/null && break; sleep 1; done
+          mkdir -p _site
+          curl -sf "localhost:8787/digest/$NIGHT" -o _site/index.html
+          if [ -n "$LANE_MARKER" ]; then
+            grep -q 'class="marker"' _site/index.html
+            echo "saved with the lane marker"
+          else
+            grep -q 'no marker set' _site/index.html
+            echo "saved without a marker"
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
